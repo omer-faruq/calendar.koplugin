@@ -1,15 +1,10 @@
 -- calendar_ics.lua — pure iCalendar (RFC-5545 subset) parser. No KOReader deps.
 local ICS = {}
-
--- Local-vs-UTC offset in seconds (local - UTC). Whole-minute offsets only.
-local function local_utc_offset()
-    local now = os.time()
-    return os.difftime(os.time(os.date("*t", now)), os.time(os.date("!*t", now)))
-end
+local TZ = require("calendar_timezone")
 
 -- Parse an iCalendar date or date-time value.
 -- Returns (epoch_seconds, all_day_bool).
-function ICS.parseDateTime(str)
+function ICS.parseDateTime(str, zone)
     -- date-only: YYYYMMDD
     local y, m, d = str:match("^(%d%d%d%d)(%d%d)(%d%d)$")
     if y then
@@ -26,10 +21,10 @@ function ICS.parseDateTime(str)
     if Y then
         local t = { year=tonumber(Y), month=tonumber(Mo), day=tonumber(D),
                     hour=tonumber(H), min=tonumber(Mi), sec=tonumber(S) }
-        local epoch = os.time(t)  -- interpreted as local wall time
+        local epoch = TZ.time(t, zone)
         if Z == "Z" then
-            -- Fields are UTC; convert to true epoch by adding local offset.
-            epoch = epoch + local_utc_offset()
+            -- UTC conversion must not depend on the device's current DST.
+            epoch = TZ.utc(t)
         end
         return epoch, false
     end
@@ -82,13 +77,24 @@ end
 
 function ICS.parse(text)
     local events = {}
+    local lines = unfold(text)
+    local zones = TZ.parse(lines)
+    local function zoneFor(head, value)
+        if value:sub(-1) == "Z" then return TZ.UTC end
+        local id = head:match(';TZID="([^"]+)"') or head:match(';TZID=([^;]+)')
+        if id and not zones[id] then zones[id] = TZ.system(id) end
+        if id and not zones[id] then
+            error("Calendar: missing VTIMEZONE definition for TZID " .. id)
+        end
+        return id and zones[id] or nil
+    end
     local cur = nil
     -- Depth of nested components inside the current VEVENT (VALARM etc.).
     -- Their properties must not leak into the event: a Google reminder's
     -- VALARM carries its own "SUMMARY:Alarm notification", which would
     -- otherwise overwrite the event's real title.
     local sub_depth = 0
-    for _, line in ipairs(unfold(text)) do
+    for _, line in ipairs(lines) do
         local name, head, value = splitLine(line)
         if name == "BEGIN" and value == "VEVENT" then
             cur = { summary = "", exdates = {} }
@@ -122,23 +128,24 @@ function ICS.parse(text)
             elseif name == "DESCRIPTION" then
                 cur.description = unescape(value)
             elseif name == "DTSTART" then
-                local epoch, all_day = ICS.parseDateTime(value)
+                cur.timezone = zoneFor(head, value)
+                local epoch, all_day = ICS.parseDateTime(value, cur.timezone)
                 cur.dtstart = epoch
                 cur.all_day = all_day
             elseif name == "DTEND" then
-                local epoch = ICS.parseDateTime(value)
+                local epoch = ICS.parseDateTime(value, zoneFor(head, value))
                 cur.dtend = epoch
             elseif name == "DURATION" then
                 cur.duration = ICS.parseDuration(value)
             elseif name == "RECURRENCE-ID" then
-                local epoch = ICS.parseDateTime(value)
+                local epoch = ICS.parseDateTime(value, zoneFor(head, value))
                 if epoch then cur.recurrence_id = epoch end
             elseif name == "RRULE" then
                 cur.rrule = value
             elseif name == "EXDATE" then
                 for part in (value .. ","):gmatch("([^,]*),") do
                     if part ~= "" then
-                        local epoch = ICS.parseDateTime(part)
+                        local epoch = ICS.parseDateTime(part, zoneFor(head, part))
                         if epoch then cur.exdates[#cur.exdates + 1] = epoch end
                     end
                 end
