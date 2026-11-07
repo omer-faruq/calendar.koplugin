@@ -1,10 +1,12 @@
 -- calendar_recur.lua — pure recurrence expansion (RFC-5545 subset). No KOReader deps.
 local Recur = {}
+local TZ = require("calendar_timezone")
+local ICS = require("calendar_ics")
 
 local MAX_ITER = 2000
 local WDAY = { SU=1, MO=2, TU=3, WE=4, TH=5, FR=6, SA=7 }  -- os.date %w+1
 
-local function parseRule(rrule)
+local function parseRule(rrule, zone)
     local r = {}
     for k, v in (rrule .. ";"):gmatch("([^=;]+)=([^;]*);") do
         r[k:upper()] = v
@@ -16,8 +18,8 @@ local function parseRule(rrule)
         -- UNTIL is a date or date-time (often Z); reuse the same field parse.
         local y,mo,d,H,Mi,S = r.UNTIL:match("^(%d%d%d%d)(%d%d)(%d%d)T?(%d?%d?)(%d?%d?)(%d?%d?)Z?$")
         if y then
-            r.UNTIL_TS = os.time{ year=tonumber(y), month=tonumber(mo), day=tonumber(d),
-                hour=tonumber(H) or 23, min=tonumber(Mi) or 59, sec=tonumber(S) or 59 }
+            r.UNTIL_TS = ICS.parseDateTime(r.UNTIL:find("T") and r.UNTIL
+                or (r.UNTIL .. "T235959"), zone)
         end
     end
     if r.BYDAY then
@@ -32,8 +34,8 @@ end
 
 -- Add n calendar units of the given frequency to an epoch, preserving
 -- wall-clock time across DST (arithmetic done on broken-down local time).
-local function addUnits(epoch, freq, n)
-    local t = os.date("*t", epoch)
+local function addUnits(epoch, freq, n, zone)
+    local t = TZ.date(epoch, zone)
     if freq == "DAILY" then
         t.day = t.day + n
     elseif freq == "WEEKLY" then
@@ -44,26 +46,26 @@ local function addUnits(epoch, freq, n)
         t.year = t.year + n
     end
     t.isdst = nil
-    return os.time(t)
+    return TZ.time(t, zone)
 end
 
 -- Start-of-week (as os epoch) containing `epoch`, week starting Monday.
-local function weekStart(epoch)
-    local wday = tonumber(os.date("%w", epoch))  -- 0=Sun..6=Sat
+local function weekStart(epoch, zone)
+    local wday = TZ.date(epoch, zone).wday - 1
     local back = (wday == 0) and 6 or (wday - 1)  -- days back to Monday
-    local t = os.date("*t", epoch)
+    local t = TZ.date(epoch, zone)
     t.day = t.day - back
     t.isdst = nil
-    return os.time(t)
+    return TZ.time(t, zone)
 end
 
 -- Set the time-of-day of `day_epoch` to match the h/m/s of `ref_epoch`.
-local function withTimeOf(day_epoch, ref_epoch)
-    local d = os.date("*t", day_epoch)
-    local r = os.date("*t", ref_epoch)
+local function withTimeOf(day_epoch, ref_epoch, zone)
+    local d = TZ.date(day_epoch, zone)
+    local r = TZ.date(ref_epoch, zone)
     d.hour, d.min, d.sec = r.hour, r.min, r.sec
     d.isdst = nil
-    return os.time(d)
+    return TZ.time(d, zone)
 end
 
 function Recur.expand(event, window_start, window_end)
@@ -90,7 +92,8 @@ function Recur.expand(event, window_start, window_end)
         return out
     end
 
-    local r = parseRule(event.rrule)
+    local zone = event.timezone
+    local r = parseRule(event.rrule, zone)
     local freq = (r.FREQ or "DAILY"):upper()
     local out = {}
     local count = 0            -- counts every generated occurrence (before EXDATE)
@@ -98,16 +101,16 @@ function Recur.expand(event, window_start, window_end)
     -- Candidate generator: for WEEKLY+BYDAY, each period yields multiple days.
     local function periodStarts(period_anchor)
         if freq == "WEEKLY" and r.BYDAY_SET and #r.BYDAY_SET > 0 then
-            local ws = weekStart(period_anchor)
+            local ws = weekStart(period_anchor, zone)
             local starts = {}
             for _, target in ipairs(r.BYDAY_SET) do   -- target: 1=Sun..7=Sat
                 -- Monday's index in our 1..7 (Sun=1) space is 2; day offset from
                 -- Monday = (target - 2) mod 7.
                 local off = (target - 2) % 7
-                local day = os.date("*t", ws)
+                local day = TZ.date(ws, zone)
                 day.day = day.day + off
                 day.isdst = nil
-                starts[#starts + 1] = withTimeOf(os.time(day), event.dtstart)
+                starts[#starts + 1] = withTimeOf(TZ.time(day, zone), event.dtstart, zone)
             end
             table.sort(starts)
             return starts
@@ -130,7 +133,7 @@ function Recur.expand(event, window_start, window_end)
             skip = math.floor((window_start - event.dtstart) / (7 * 86400 * r.INTERVAL)) - 1
         end
         if skip and skip > 0 then
-            anchor = addUnits(event.dtstart, freq, skip * r.INTERVAL)
+            anchor = addUnits(event.dtstart, freq, skip * r.INTERVAL, zone)
         end
     end
 
@@ -145,7 +148,7 @@ function Recur.expand(event, window_start, window_end)
                 if r.COUNT and count >= r.COUNT then goto done end
             end
         end
-        anchor = addUnits(anchor, freq, r.INTERVAL)
+        anchor = addUnits(anchor, freq, r.INTERVAL, zone)
         if anchor > window_end + 366 * 86400 then break end   -- absolute safety
     end
     ::done::

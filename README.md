@@ -72,9 +72,15 @@ KOReader language automatically. To add a language, copy
 
 ## Limitations
 
-- Timezones: `TZID`/`VTIMEZONE` are not converted; times show as their literal
-  wall-clock value (UTC `...Z` values are converted to local). Correct for
-  same-timezone use.
+- Timezones: each event's `TZID` is converted to the device's local time.
+  Recurrences retain the source timezone's wall-clock time across DST changes.
+  Embedded `VTIMEZONE` definitions support STANDARD/DAYLIGHT, RDATE and yearly
+  BYMONTH/BYDAY/BYMONTHDAY transition rules (as exported by Google Calendar).
+  When definitions are absent, the device's Unix zoneinfo database is used
+  if available. An unresolved TZID raises an explicit error rather than
+  silently displaying the wrong time. Exotic VTIMEZONE recurrence rules are
+  not supported. Date-only events remain local calendar dates; floating times
+  without TZID or Z use the device's local timezone.
 - Recurrence: supports `FREQ` DAILY/WEEKLY/MONTHLY/YEARLY with
   INTERVAL/COUNT/UNTIL/BYDAY, EXDATE, and single-occurrence overrides via
   `RECURRENCE-ID` (a rescheduled instance shows only at its new time).
