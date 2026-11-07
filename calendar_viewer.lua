@@ -24,7 +24,11 @@ function Viewer:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     self.covers_fullscreen = true -- hint for UIManager:_repaint()
     if Device:hasKeys() then
-        self.key_events = { Close = { { Device.input.group.Back } } }
+        self.key_events = {
+            Close = { { Device.input.group.Back } },
+            Prev = { { Device.input.group.PgBack } },
+            Next = { { Device.input.group.PgFwd } },
+        }
     end
     if Device:isTouchDevice() then
         self.ges_events = {
