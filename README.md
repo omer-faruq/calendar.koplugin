@@ -39,7 +39,8 @@ share it.
   remembers the last mode you used, opens instantly from the cache, and — if
   the cache is stale and Wi-Fi is already connected — refreshes right after
   opening (with a "Refreshing calendars…" message). Today is highlighted in
-  every view.
+  every view. The week view uses evenly spaced day cards in two columns
+  (three in landscape), with the last day spanning the final row.
 - **Tools → Calendar → Calendars** — tap a calendar to show/hide it without
   editing the config file (the choice persists across reloads).
 - **Gesture** — assign *Open calendar* / *Refresh calendar* in KOReader's

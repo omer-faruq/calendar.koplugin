@@ -308,7 +308,9 @@ function View.buildWeek(anchor, instances, width, height, opts)
     local VerticalSpan   = require("ui/widget/verticalspan")
     local TextWidget     = require("ui/widget/textwidget")
     local TextBoxWidget  = require("ui/widget/textboxwidget")
-    local LineWidget     = require("ui/widget/linewidget")
+    local WidgetContainer = require("ui/widget/container/widgetcontainer")
+    local HorizontalGroup = require("ui/widget/horizontalgroup")
+    local HorizontalSpan = require("ui/widget/horizontalspan")
     local Geom           = require("ui/geometry")
     local Font           = require("ui/font")
     local Screen         = require("device").screen
@@ -333,35 +335,73 @@ function View.buildWeek(anchor, instances, width, height, opts)
     vg[#vg+1] = VerticalSpan:new{ width = math.floor(pad/2) }
     y = y + math.floor(pad/2)
 
-    local footer_h = 0
-    if opts.last_sync then footer_h = Screen:scaleBySize(24) + math.floor(pad/2) end
-    local avail_h = math.max(height - y - footer_h, #groups)
-    local block_h = math.floor(avail_h / #groups)
-    local events_h = math.max(block_h - Screen:scaleBySize(22), Screen:scaleBySize(14))
-
-    for _, g in ipairs(groups) do
-        local head_text = View.fdate("%a  %d %b", g.day_start)
-        local head = g.day_start == today and invertedText(head_text, head_face)
-                                          or TextWidget:new{ text = head_text, face = head_face }
-        local lines = {}
-        for _, inst in ipairs(g.events) do lines[#lines+1] = eventLine(inst) end
-        local body = TextBoxWidget:new{
-            text = table.concat(lines, "\n"), face = body_face, width = inner_w,
-            height = events_h, height_overflow_show_ellipsis = true,
-        }
-        local day_vg = VerticalGroup:new{ align = "left", head, body }
-        vg[#vg+1] = day_vg
-        local h = day_vg:getSize().h
-        regions[#regions+1] = { x = pad, y = y, w = inner_w, h = h, day_start = g.day_start, events = g.events }
-        y = y + h
-        vg[#vg+1] = LineWidget:new{
-            background = Blitbuffer.COLOR_GRAY_D, dimen = Geom:new{ w = inner_w, h = Screen:scaleBySize(0.5) } }
-        y = y + Screen:scaleBySize(0.5)
+    local gap = pad
+    local inset = Screen:scaleBySize(8)
+    local border = math.max(1, Screen:scaleBySize(1))
+    local footer
+    if opts.last_sync then
+        footer = TextWidget:new{ text = lastSyncText(opts.last_sync), face = head_face }
+    end
+    local footer_h = footer and (footer:getSize().h + gap) or 0
+    local columns = width > height and 3 or 2
+    local rows = math.ceil(#groups / columns)
+    local grid_h = math.max(rows, height - pad - y - footer_h)
+    local usable_h = grid_h - gap * (rows - 1)
+    local index = 1
+    for r = 1, rows do
+        local row = HorizontalGroup:new{ align = "top" }
+        local count = math.min(columns, #groups - index + 1)
+        local usable_w = inner_w - gap * (count - 1)
+        local card_h = math.floor(usable_h * r / rows) - math.floor(usable_h * (r - 1) / rows)
+        local x = pad
+        for c = 1, count do
+            local g = groups[index]
+            local card_w = math.floor(usable_w * c / count) - math.floor(usable_w * (c - 1) / count)
+            local is_today = g.day_start == today
+            local stroke = is_today and border * 2 or border
+            local content_w = math.max(1, card_w - 2 * (inset + stroke))
+            local head_text = View.fdate("%a  %d %b", g.day_start)
+            local head = is_today and invertedText(head_text, head_face)
+                or TextWidget:new{ text = head_text, face = head_face, max_width = content_w }
+            local lines = {}
+            for _, inst in ipairs(g.events) do lines[#lines+1] = eventLine(inst) end
+            local body = TextBoxWidget:new{
+                text = #lines > 0 and table.concat(lines, "\n") or (opts.empty_text or L("No events")),
+                face = body_face, width = content_w,
+                height = math.max(1, card_h - 2 * (inset + stroke) - head:getSize().h - math.floor(gap/2)),
+                height_overflow_show_ellipsis = true,
+            }
+            local card = FrameContainer:new{
+                width = card_w, height = card_h, margin = 0, padding = inset,
+                bordersize = stroke,
+                color = is_today and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_GRAY_B,
+                background = Blitbuffer.COLOR_WHITE,
+                VerticalGroup:new{ align = "left", head,
+                    VerticalSpan:new{ width = math.floor(gap/2) }, body },
+            }
+            -- Explicit dimensions keep short/empty cards aligned with full ones.
+            row[#row+1] = WidgetContainer:new{
+                dimen = Geom:new{ w = card_w, h = card_h }, card,
+            }
+            regions[#regions+1] = {
+                x = x, y = y, w = card_w, h = card_h,
+                day_start = g.day_start, events = g.events,
+            }
+            x = x + card_w + gap
+            if c < count then row[#row+1] = HorizontalSpan:new{ width = gap } end
+            index = index + 1
+        end
+        vg[#vg+1] = row
+        y = y + card_h
+        if r < rows then
+            vg[#vg+1] = VerticalSpan:new{ width = gap }
+            y = y + gap
+        end
     end
 
     if opts.last_sync then
-        vg[#vg+1] = VerticalSpan:new{ width = math.floor(pad/2) }
-        vg[#vg+1] = TextWidget:new{ text = lastSyncText(opts.last_sync), face = head_face }
+        vg[#vg+1] = VerticalSpan:new{ width = gap }
+        vg[#vg+1] = footer
     end
 
     local widget = FrameContainer:new{
